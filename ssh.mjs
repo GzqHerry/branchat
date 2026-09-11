@@ -95,7 +95,7 @@ export class SshConnections {
         runtime = await this.connectRuntime(client,this.base,sshExec,report);
         const {createBackend} = await import('./server.mjs');
         const isolatedUser = String(profile.username).replace(/[^a-zA-Z0-9_.-]/g, '_');
-        backend = await createBackend({remoteRuntime: runtime,dataDirectory: path.join(this.data,'ssh-hosts',isolatedUser),listenPort: 0,writeState: false,enableSSH: false,
+        backend = await createBackend({remoteRuntime: runtime,dataDirectory: path.join(this.data,'ssh-hosts',isolatedUser),sharedDirectory: path.join(this.data,'ssh-shared',id),listenPort: 0,writeState: false,enableSSH: false,
           // A browser can disappear without calling an explicit disconnect. Keep a
           // short grace period for EventSource reconnects, then tear down the SSH
           // runtime so its app-server cannot retain an active writer indefinitely.

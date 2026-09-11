@@ -15,7 +15,7 @@ import {questionDeletionScope, validateDeletionPreview} from './question-trash.m
 import {resolveWorkspace, threadExecution, turnExecution, InteractionBridge} from './execution.mjs';
 
 const base = path.dirname(fileURLToPath(import.meta.url));
-export async function createBackend({dataDirectory, remoteRuntime, listenPort, writeState = true, enableSSH = true, onClientsEmpty = null, onClientConnected = null} = {}) {
+export async function createBackend({dataDirectory, remoteRuntime, listenPort, writeState = true, enableSSH = true, onClientsEmpty = null, onClientConnected = null, sharedDirectory = null} = {}) {
 const data = dataDirectory || process.env.TREE_DATA_DIR || path.resolve(base, '../../work/tree-data');
 const home = path.join(data, 'codex-home');
 const projectsRoot = remoteRuntime?.projectsRoot || process.env.TREE_PROJECTS_DIR || path.resolve(base, '../projects');
@@ -24,6 +24,9 @@ const python = process.env.TREE_PYTHON || (process.platform === 'win32' ? 'C:/Us
 const exec = promisify(execFile);
 await mkdir(data, {recursive: true});
 const storeFile = path.join(data, 'branches.json');
+const sharedFile = sharedDirectory ? path.join(sharedDirectory, 'conversations.json') : null;
+let shared = {};
+if (sharedFile) { try { shared = JSON.parse(await readFile(sharedFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; await mkdir(sharedDirectory, {recursive:true}); } }
 let store;
 try { store = JSON.parse(await readFile(storeFile, 'utf8')); }
 catch (e) { if (e.code !== 'ENOENT') throw e; store = {version: 1, branches: {}}; }
@@ -57,6 +60,7 @@ function readTree(rootId){
  return pendingTrees.get(key);
 }
 async function save() { await writeFile(storeFile + '.tmp', JSON.stringify(store, null, 2)); await rename(storeFile + '.tmp', storeFile); }
+async function saveShared(record) { if (!sharedFile || !record?.shared) return; shared[record.id] = {id:record.id,name:record.name,title:record.name,shared:true,updatedAt:record.updatedAt||Date.now(),workspaceCwd:record.workspaceCwd}; await writeFile(sharedFile+'.tmp',JSON.stringify(shared,null,2)); await rename(sharedFile+'.tmp',sharedFile); }
 async function saveBranchChanges(changes) {
   const previous = changes.map(b => store.branches[b.id]);
   for (const branch of changes) store.branches[branch.id] = branch;
@@ -117,6 +121,7 @@ const token = randomBytes(24).toString('hex');
 const validId = id => typeof id === 'string' && /^[\da-f-]{36}$/i.test(id);
 async function history(id, sync = true) {
   if (!validId(id)) throw new Error('无效的对话 ID。');
+  if (!owned(id) && shared[id]) { store.conversations[id] = {...shared[id], importedShared:true}; await save(); }
   if (store.imports[id]) return {...store.imports[id], contextRevision: owned(id)?.contextRevision || 0};
   const imported = !owned(id) && sync ? await source('import', id) : null;
   const actualId = runtimeId(id);
@@ -229,6 +234,7 @@ async function newConversation(text, {internalSummary = false, model, effort, cw
   loadedRuntimes.add(thread.id);
   const record = {id: thread.id, workspaceCwd, ...(internalSummary ? {internalSummary: true} : {}), ...(shared ? {shared: true} : {}), name: text.trim().replace(/\s+/g, ' ').slice(0, 60), createdAt: Date.now(), updatedAt: Date.now()};
   store.conversations[thread.id] = record;
+  await saveShared(record);
   try {
     const response = await startTurn(thread.id, text, {model, effort});
     // The start acknowledgement is enough to display the submitted turn.
@@ -387,7 +393,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/api/threads') {
       const originals = await source('list');
-      const local = Object.values(store.conversations).map(c => ({...c, title: c.name, updated_at: c.updatedAt / 1000, source: 'web', archived: false}));
+      const publicRecords = Object.values(shared).filter(c => !store.conversations[c.id]);
+      const local = [...Object.values(store.conversations), ...publicRecords].map(c => ({...c, title: c.name + (c.shared ? '（公开）' : ''), name: c.name + (c.shared ? '（公开）' : ''), updated_at: c.updatedAt / 1000, source: 'web', archived: false}));
       return json(res, 200, {threads: [...local, ...originals.filter(t => !store.conversations[t.id])].map(t => ({...t, ...store.metadata[t.id], ...(t.shared ? {name: t.name + '（公开）', title: t.name + '（公开）'} : {})})).sort((a, b) => b.updated_at - a.updated_at), branches: Object.values(store.branches).filter(b => !b.hidden), metadata: store.metadata});
     }
     if (req.method === 'GET' && url.pathname === '/api/tree') return json(res, 200, await readTree(url.searchParams.get('id')));

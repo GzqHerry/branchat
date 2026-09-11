@@ -222,12 +222,12 @@ async function startTurn(threadId, text, options = {}) {
   return response;
   }finally{if(startingTurns.get(threadId)===pending)startingTurns.delete(threadId);}
 }
-async function newConversation(text, {internalSummary = false, model, effort} = {}) {
+async function newConversation(text, {internalSummary = false, model, effort, cwd, shared = false} = {}) {
   validateText(text);
-  const workspaceCwd = await workspace({id: randomUUID()}, projectsRoot);
+  const workspaceCwd = await workspace({id: randomUUID(), workspaceCwd: typeof cwd === 'string' ? cwd : undefined}, projectsRoot);
   const {thread} = await rpc.request('thread/start', {ephemeral: false, historyMode: 'paginated', ...threadExecution(workspaceCwd)});
   loadedRuntimes.add(thread.id);
-  const record = {id: thread.id, workspaceCwd, ...(internalSummary ? {internalSummary: true} : {}), name: text.trim().replace(/\s+/g, ' ').slice(0, 60), createdAt: Date.now(), updatedAt: Date.now()};
+  const record = {id: thread.id, workspaceCwd, ...(internalSummary ? {internalSummary: true} : {}), ...(shared ? {shared: true} : {}), name: text.trim().replace(/\s+/g, ' ').slice(0, 60), createdAt: Date.now(), updatedAt: Date.now()};
   store.conversations[thread.id] = record;
   try {
     const response = await startTurn(thread.id, text, {model, effort});
@@ -388,7 +388,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/threads') {
       const originals = await source('list');
       const local = Object.values(store.conversations).map(c => ({...c, title: c.name, updated_at: c.updatedAt / 1000, source: 'web', archived: false}));
-      return json(res, 200, {threads: [...local, ...originals.filter(t => !store.conversations[t.id])].map(t => ({...t, ...store.metadata[t.id]})).sort((a, b) => b.updated_at - a.updated_at), branches: Object.values(store.branches).filter(b => !b.hidden), metadata: store.metadata});
+      return json(res, 200, {threads: [...local, ...originals.filter(t => !store.conversations[t.id])].map(t => ({...t, ...store.metadata[t.id], ...(t.shared ? {name: t.name + '（公开）', title: t.name + '（公开）'} : {})})).sort((a, b) => b.updated_at - a.updated_at), branches: Object.values(store.branches).filter(b => !b.hidden), metadata: store.metadata});
     }
     if (req.method === 'GET' && url.pathname === '/api/tree') return json(res, 200, await readTree(url.searchParams.get('id')));
     if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
@@ -439,7 +439,7 @@ const server = http.createServer(async (req, res) => {
           const changes = restorationChanges(store.branches, input.threadId, input.deletionId);
           await saveBranchChanges(changes); return {restoredIds: changes.map(b => b.id)};
         }
-        if (url.pathname === '/api/new') return newConversation(input.text, {model: input.model, effort: input.effort});
+        if (url.pathname === '/api/new') return newConversation(input.text, {model: input.model, effort: input.effort, cwd: input.cwd, shared: input.shared === true});
         if (url.pathname === '/api/fork') return fork(input);
         if (url.pathname === '/api/send') {
           requireVisible(input.threadId);

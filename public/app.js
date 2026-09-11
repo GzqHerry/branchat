@@ -9,7 +9,7 @@ const collapsed=new Set();
 let drafts={};try{drafts=JSON.parse(treeStorage.getItem('tree-drafts')||'{}')}catch{}
 let lastRoot=treeStorage.getItem('tree-root');
 let eventSource;
-let pendingNew=false,features=new Set();
+let pendingNew=false,features=new Set(),newConversationCwd='',newConversationShared=false;
 let modelChoice=treeStorage.getItem('tree-model')||'';
 let executionUI,modelUI;
 const stoppingThreads=new Set(),staleWriterThreads=new Set();
@@ -249,6 +249,10 @@ async function loadCatalog(choose=true){
  if(initial)await loadTree(initial.id);else startNew();
 }
 function startNew(){
+ const chosen=window.prompt('新对话工作路径（留空使用默认目录）',newConversationCwd||'');
+ if(chosen===null)return;
+ newConversationCwd=chosen.trim();
+ newConversationShared=window.confirm('将此对话设为公开会话？\n公开会话会显示给同一 SSH 用户的其他网页窗口。');
  saveReading();
  persistDraft();requestSeq++;pendingNew=true;snapshot=null;selected={threadId:'new',turnId:null};treeStorage.setItem('tree-new','true');
  $('conversation-label').textContent='新对话';$('source-kind').textContent='网页对话';$('branch-type').textContent='网页对话';$('branch-name').textContent='新对话';$('rename').hidden=true;
@@ -504,7 +508,7 @@ $('fork').onclick=()=>act(doFork);
  act(async()=>{
  if(pendingNew){
    if(!features.has('new-conversation'))throw new Error('新建对话需要新版服务。请双击 Restart.cmd 后重试，输入草稿会保留。');
- const response=await api('new',{text:submittedText,...modelSettings()});
+ const response=await api('new',{text:submittedText,...modelSettings(),...(newConversationCwd?{cwd:newConversationCwd}:{}),...(newConversationShared?{shared:true}:{})});
    $('prompt').value='';persistDraft();pendingNew=false;treeStorage.removeItem('tree-new');lastRoot=response.conversation.id;
    treeStorage.setItem('tree-root',lastRoot);
    snapshot={root:{id:lastRoot,model:modelSettings().model,turns:[]},rootRecord:response.conversation,branches:[],active:{},metadata:{},usage:{}};

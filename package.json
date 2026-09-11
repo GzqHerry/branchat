@@ -1,0 +1,19 @@
+{
+  "name": "branchat",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "build:markdown": "node scripts/build-markdown.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "highlight.js": "11.11.1",
+    "katex": "0.18.7"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  }
+}

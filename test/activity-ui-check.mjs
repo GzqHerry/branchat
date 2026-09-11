@@ -1,0 +1,85 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {fileURLToPath} from 'node:url';
+const require=createRequire(import.meta.url);
+const {chromium}=require(process.env.TREE_PLAYWRIGHT||'playwright');
+const port=47840,base='http://127.0.0.1:'+port;
+const fixture=spawn(process.execPath,[fileURLToPath(new URL('./activity-events-server.mjs',import.meta.url))],{env:{...process.env,PORT:String(port)},windowsHide:true,stdio:['ignore','pipe','pipe']});
+const stopped=once(fixture,'exit');
+let browser;
+try{
+ await Promise.race([once(fixture.stdout,'data'),stopped.then(()=>{throw new Error('Fixture failed to start');})]);
+ browser=await chromium.launch({headless:true,...(process.env.TREE_BROWSER_EXE?{executablePath:process.env.TREE_BROWSER_EXE}:{})});
+ const page=await browser.newPage({viewport:{width:1280,height:850}}),errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(base);
+ await page.getByRole('button',{name:'进度测试分支',exact:true}).click();
+ const activity=page.locator('.turn-activity');await activity.waitFor();assert.equal(await activity.evaluate(el=>el.open),true);
+ const advance=async()=>{const res=await fetch(base+'/test/advance',{method:'POST'});assert.equal(res.status,200);};
+ const bottom=()=>page.waitForFunction(()=>{const list=document.querySelector('#messages');return Math.abs(list.scrollHeight-list.clientHeight-list.scrollTop)<3;});
+ await bottom();await advance();
+ await page.locator('.is-running').waitFor();
+ assert.match(await page.locator('.is-running').innerText(),/正在执行命令/);
+ await activity.locator(':scope > summary').click();assert.equal(await activity.evaluate(el=>el.open),false);
+ await advance();
+ await page.waitForFunction(()=>document.querySelector('.is-running')?.textContent.includes('正在编辑文件'));
+ assert.equal(await activity.evaluate(el=>el.open),false);await activity.locator(':scope > summary').click();
+ await bottom();
+ await advance();
+ await page.waitForFunction(()=>document.querySelector('#stream-answer')?.textContent.includes('连续输出 45'));
+ assert.equal(await activity.evaluate(el=>el.open),false);assert.equal(await page.locator('#stream-progress').isVisible(),false);
+ assert.equal(await page.locator('#stream-answer').isVisible(),true);assert.equal(await page.locator('#stream-answer').evaluate(el=>!!el.closest('.turn-activity')),false);
+ await bottom();
+ assert.equal(await page.locator('.message.commentary').count(),2);
+ assert.equal(await page.locator('#messages').innerText().then(text=>text.includes('PRIVATE_REASONING')),false);
+ await activity.locator(':scope > summary').evaluate(el=>el.click());
+ await page.locator('#messages').press('PageUp');
+ await page.waitForFunction(()=>!document.querySelector('#latest').hidden);
+ // Browser keyboard scrolling animates independently of the stream renderer.
+ await page.evaluate(()=>new Promise(resolve=>{
+   const list=document.querySelector('#messages');let last=list.scrollTop,stable=0;
+   const check=()=>{const top=list.scrollTop;stable=Math.abs(top-last)<0.1?stable+1:0;last=top;if(stable>=8)resolve();else requestAnimationFrame(check);};
+   requestAnimationFrame(check);
+ }));
+ const oldTop=await page.locator('#messages').evaluate(el=>el.scrollTop);
+ await advance();
+ await page.waitForFunction(()=>document.querySelector('#stream-answer')?.textContent.includes('补充内容 15'));
+ assert.equal(await activity.evaluate(el=>el.open),true);
+ assert.equal(await page.locator('#messages').evaluate(el=>el.scrollTop),oldTop);
+ await activity.locator(':scope > summary').evaluate(el=>el.click());
+ assert.equal(await page.locator('#latest-label').isVisible(),true);
+ await page.locator('#latest').click();await bottom();
+ await advance();
+ await page.waitForFunction(()=>document.querySelector('#run-state').textContent.startsWith('已完成'));
+ await bottom();assert.equal(await page.locator('.message.commentary').count(),2);
+ assert.equal(await page.locator('#live-progress').count(),0);
+ await activity.locator(':scope > summary').click();
+ await page.locator('.activity-group > summary').click();
+ await page.locator('.activity-tool > summary').nth(1).click();
+ await page.locator('.file-change > summary').click();
+ assert.match(await page.locator('.file-diff').innerText(),/const follow = true/);
+ assert.equal(await page.locator('#messages script').count(),0);
+ // A forced history refresh must preserve the reader's expanded file details.
+ const refreshed=page.waitForResponse(response=>response.url().includes('/api/tree'));
+ await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+ await refreshed;
+ await page.waitForFunction(()=>document.querySelectorAll('details[open]').length===4);
+ await activity.locator(':scope > summary').scrollIntoViewIfNeeded();
+ await page.screenshot({path:fileURLToPath(new URL('../../../work/activity-expanded.png',import.meta.url))});
+ await page.setViewportSize({width:390,height:844});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.emulateMedia({reducedMotion:'reduce'});
+ assert.equal(await page.locator('#messages').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+ await page.reload();await page.getByRole('button',{name:'进度测试分支',exact:true}).click();assert.equal(await activity.evaluate(el=>el.open),false);
+ await activity.locator(':scope > summary').scrollIntoViewIfNeeded();
+ await page.screenshot({path:fileURLToPath(new URL('../../../work/activity-collapsed.png',import.meta.url))});
+ await activity.locator(':scope > summary').focus();await page.keyboard.press('Enter');assert.equal(await activity.evaluate(el=>el.open),true);
+ assert.deepEqual(errors,[]);
+ console.log('PASS: whole activity expands during processing; manual collapse survives updates; first answer auto-collapses; answer outside group; expanded details survive refresh; reload defaults collapsed; keyboard disclosure; scrolling, safe diffs, mobile');
+}finally{
+ await browser?.close();
+ try{await fetch(base+'/test/stop');}catch{fixture.kill();}
+ await stopped;
+}

@@ -92,7 +92,7 @@ function renderStream(content,item){
    streamRenders.clear();icons();afterOutput(changed);
  });
 }
-let followOutput=true,scrollUpdating=false,scrollFrame=0,unreadOutput=false,visibleSignature='';
+let followOutput=true,scrollUpdating=false,scrollFrame=0,unreadOutput=false,visibleSignature='',treeSignature='';
 function updateLatest(){
  $('latest').hidden=followOutput;$('latest-label').hidden=!unreadOutput;
  $('latest').setAttribute('aria-label',unreadOutput?'有新内容，回到最新输出':'回到最新输出');
@@ -312,13 +312,21 @@ async function loadTree(id,keep=false){
  if(selected?.turnId&&!current()?.turns.some(t=>t.id===selected.turnId))selected={threadId:selected.threadId,turnId:current()?.turns.at(-1)?.id||null};
  renderTree();renderChat(keep);$('prompt').value=drafts[draftKey()]||'';updateComposer();
 }
-function select(threadId,turnId){if(busy)return;saveReading();persistDraft();selected={threadId,turnId};markRead();renderTree();renderChat();$('prompt').value=drafts[draftKey()]||'';updateComposer();}
-function renderTree(){
+function select(threadId,turnId){if(busy)return;saveReading();persistDraft();selected={threadId,turnId};markRead();renderTree(true);renderChat();$('prompt').value=drafts[draftKey()]||'';updateComposer();}
+function renderTree(force=false){
  if(!snapshot)return;
- const nav=$('tree');nav.replaceChildren();
- const query=$('search').value.toLocaleLowerCase();let count=0;
+ const query=$('search').value.toLocaleLowerCase();
+ const quickSignature=[query,selected?.threadId||'',selected?.turnId||'',collapsed.size,snapshot.branches.map(b=>`${b.id}:${b.thread?.turns.length||0}:${b.thread?.turns.at(-1)?.status||''}`).join('|'),snapshot.root.turns.length,snapshot.root.turns.at(-1)?.status||''].join('|');
+ if(!force&&quickSignature===treeSignature)return;
+ treeSignature=quickSignature;
+ const nav=$('tree');nav.replaceChildren();let count=0;
  const branchMap=new Map(snapshot.branches.filter(b=>b.thread).map(b=>[b.id,b]));
- const childrenOf=(tid,pivot)=>[...branchMap.values()].filter(b=>b.parentId===tid&&b.pivotTurnId===pivot);
+ const childMap=new Map();
+ for(const branch of branchMap.values()){
+   const key=branch.parentId+':'+branch.pivotTurnId;
+   const list=childMap.get(key);if(list)list.push(branch);else childMap.set(key,[branch]);
+ }
+ const childrenOf=(tid,pivot)=>childMap.get(tid+':'+pivot)||[];
  const ul=document.createElement('ul');
  const makeRow=(label,tid,turn,branch=false)=>{
    const li=document.createElement('li');const row=document.createElement('div');row.className='tree-row';
@@ -338,7 +346,7 @@ function renderTree(){
  };
  const addToggle=(row,key,children)=>{
    if(!children.children.length)return;
-   const button=document.createElement('button');button.className='icon chevron';button.title=collapsed.has(key)?'展开':'收起';button.setAttribute('aria-label',button.title);button.setAttribute('aria-expanded',String(!collapsed.has(key)));button.append(icon(collapsed.has(key)?'chevron-right':'chevron-down'));button.onclick=()=>{collapsed.has(key)?collapsed.delete(key):collapsed.add(key);renderTree();};row.prepend(button);children.hidden=collapsed.has(key)&&!query;
+   const button=document.createElement('button');button.className='icon chevron';button.title=collapsed.has(key)?'展开':'收起';button.setAttribute('aria-label',button.title);button.setAttribute('aria-expanded',String(!collapsed.has(key)));button.append(icon(collapsed.has(key)?'chevron-right':'chevron-down'));button.onclick=()=>{collapsed.has(key)?collapsed.delete(key):collapsed.add(key);renderTree(true);};row.prepend(button);children.hidden=collapsed.has(key)&&!query;
  };
  const sequence=(thread,start,parent,seen)=>{
    for(let i=start;i<thread.turns.length;i++){
@@ -445,7 +453,9 @@ function renderChat(preserveScroll=false){
  $('branch-name').title=$('branch-name').textContent;
  const end=selected.turnId?t.turns.findIndex(x=>x.id===selected.turnId):t.turns.length-1;
  const shownTurns=t.turns.slice(0,end+1);
- const signature=JSON.stringify([selected,shownTurns.map(turn=>[turn.id,turn.status,turn.error,turn.items.filter(i=>i.type!=='reasoning')])]);
+ const signature=[selected?.threadId||'',selected?.turnId||'',shownTurns.length,...shownTurns.map(turn=>{
+   const last=turn.items.at(-1);return `${turn.id}:${turn.status}:${turn.error?.message||turn.error||''}:${turn.items.length}:${last?.id||''}:${last?.text?.length||0}`;
+ })].join('|');
  // Preserve text selections, focus and native disclosures on unchanged polls.
  if(preserveScroll&&signature===visibleSignature)return;
  const list=$('messages');const oldScroll=list.scrollTop;beforeOutput();

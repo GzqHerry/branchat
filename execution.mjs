@@ -51,12 +51,21 @@ export function approvalChoices(method, params) {
 
 const supported = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval', 'item/tool/requestUserInput']);
 export class InteractionBridge {
-  constructor(rpc, resolveThread, broadcast) {this.rpc = rpc; this.resolveThread = resolveThread; this.broadcast = broadcast; this.pending = new Map();}
+  constructor(rpc, resolveThread, broadcast) {this.rpc = rpc; this.resolveThread = resolveThread; this.broadcast = broadcast; this.pending = new Map(); this.fullAccess = false;}
   receive(msg) {
     if (msg.method === 'currentTime/read') {this.rpc.send({id: msg.id, result: {currentTimeAt: Math.floor(Date.now()/1000)}}); return;}
     const threadId = this.resolveThread(msg.params?.threadId);
     if (!supported.has(msg.method) || !threadId) {
       this.rpc.send({id: msg.id, error: {code: -32601, message: '网页暂不支持此交互，请使用可用的本机命令或文件工具。'}}); return;
+    }
+    // A full-access grant is session scoped. Once granted, honor subsequent
+    // approval requests automatically for this runtime, including requests
+    // emitted after a reconnect or from another branch.
+    if (this.fullAccess && msg.method !== 'item/tool/requestUserInput') {
+      const result = msg.method === 'item/permissions/requestApproval'
+        ? {permissions: {fileSystem: {read: null, write: null}, network: {enabled: true}}, scope: 'session'}
+        : {decision: 'acceptForSession'};
+      this.rpc.send({id: msg.id, result}); return;
     }
     const request = {id: JSON.stringify(msg.id), method: msg.method, params: {...msg.params, threadId}, choices: approvalChoices(msg.method, msg.params), createdAt: Date.now()};
     this.pending.set(request.id, {request, rpcId: msg.id}); this.broadcast('tree/interaction', {request});
@@ -85,6 +94,7 @@ export class InteractionBridge {
       const choice = request.choices.find(c => c.id === selector) ||
         (selector && typeof selector === 'object' ? request.choices.find(c => JSON.stringify(c.decision) === JSON.stringify(selector)) : null);
       if (!choice) throw new Error('请选择此请求提供的授权选项。');
+      if (choice.fullAccess) this.fullAccess = true;
       if (request.method === 'item/permissions/requestApproval') {
         const permissions = {};
         if (choice.decision === 'accept') {

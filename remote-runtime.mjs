@@ -25,10 +25,17 @@ export class RemoteRuntime {
     if (!output.trim().startsWith('/')) throw new Error('未能创建远程任务目录。');return output.trim();
   };
   async list() {
-    const threads = [];
-    for (const archived of [false,true]) {let cursor;
-      do {const page = await this.rpc.request('thread/list', {limit: 100,archived,sourceKinds: ['cli','vscode','appServer','exec','unknown'],...(cursor ? {cursor} : {})});threads.push(...page.data.map(t=>({...t,archived})));cursor = page.nextCursor;} while (cursor);
-    }
+    // Archived and active indexes are independent RPC streams. Fetch them in
+    // parallel so a large archived history cannot block the visible list.
+    const batches = await Promise.all([false,true].map(async archived => {
+      const rows = []; let cursor;
+      do {
+        const page = await this.rpc.request('thread/list', {limit: 100,archived,sourceKinds: ['cli','vscode','appServer','exec','unknown'],...(cursor ? {cursor} : {})});
+        rows.push(...page.data.map(t=>({...t,archived}))); cursor = page.nextCursor;
+      } while (cursor);
+      return rows;
+    }));
+    const threads = batches.flat();
     return threads.map(t => ({...t,name: t.name || t.preview || '对话',title: t.name || t.preview || '对话',updated_at: t.updatedAt || t.createdAt || 0,source: 'remote',archived: !!t.archived}));
   }
   async history(id) {

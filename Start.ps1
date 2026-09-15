@@ -53,6 +53,18 @@ try {
     $node = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
     if (-not $node) { $node = 'D:\Node.js\node.exe' }
     if (-not (Test-Path -LiteralPath $node)) { throw 'Node.js was not found.' }
+    # The repository intentionally excludes node_modules. Bootstrap runtime
+    # dependencies on first launch so a clean checkout starts reliably.
+    if (-not (Test-Path -LiteralPath (Join-Path $treeDir 'node_modules/ssh2/package.json'))) {
+        $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
+        if (-not $npm) { $npm = Join-Path (Split-Path $node) 'npm.cmd' }
+        if (-not (Test-Path -LiteralPath $npm)) { throw 'npm was not found. Install Node.js 20+ (which includes npm), then run Start.cmd again.' }
+        Write-Host 'Installing required packages (first launch only)...'
+        & $npm install --no-audit --no-fund --prefer-offline
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $treeDir 'node_modules/ssh2/package.json'))) {
+            throw '依赖安装失败，无法找到 ssh2。请关闭正在运行的 branchat 窗口后重新启动 Start.cmd。'
+        }
+    }
     New-Item -ItemType Directory -Path $treeData -Force | Out-Null
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $treePreviousData = $env:TREE_DATA_DIR

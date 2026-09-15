@@ -70,7 +70,8 @@ try {
     $treePreviousData = $env:TREE_DATA_DIR
     try {
         $env:TREE_DATA_DIR = $treeData
-        $proc = Start-Process -FilePath $node -ArgumentList @(('"' + (Join-Path $treeDir 'server.mjs') + '"')) -WorkingDirectory $treeDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $treeData 'server.log') -RedirectStandardError (Join-Path $treeData 'server-error.log') -PassThru
+        $serverScript = Join-Path $treeDir 'server.mjs'
+        $proc = Start-Process -FilePath $node -ArgumentList @($serverScript) -WorkingDirectory $treeDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $treeData 'server.log') -RedirectStandardError (Join-Path $treeData 'server-error.log') -PassThru
     } finally { $env:TREE_DATA_DIR = $treePreviousData }
     for ($attempt=0; $attempt -lt 60; $attempt++) {
         Start-Sleep -Milliseconds 500

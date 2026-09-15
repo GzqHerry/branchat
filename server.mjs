@@ -38,11 +38,15 @@ const usage = new Map();
 const owned = id => store.branches[id] || store.conversations[id] || store.summaries[id];
 const runtimeId = id => owned(id)?.runtimeId || id;
 const logicalId = id => [...Object.values(store.branches), ...Object.values(store.conversations)].find(r => r.runtimeId === id)?.id || id;
+let sourceListCache=null, sourceListAt=0, sourceListPending=null;
 let serial = Promise.resolve();
 function exclusive(fn) { const next = serial.then(fn); serial = next.catch(() => {}); return next; }
 let treeRevision=0;
 const pendingTrees=new Map();
+const treeCache=new Map();
 function readTree(rootId){
+ const cached=treeCache.get(rootId);
+ if(cached && Date.now()-cached.at<2500)return cached.value;
  const key=treeRevision+':'+rootId;
  if(!pendingTrees.has(key)){
    const pending=(async()=>{
@@ -51,7 +55,7 @@ function readTree(rootId){
        // during remote reads. Discard a snapshot if a mutation overlaps it.
        await serial;const revision=treeRevision;
        const snapshot=await tree(rootId);
-       if(revision===treeRevision)return snapshot;
+      if(revision===treeRevision){treeCache.set(rootId,{at:Date.now(),value:snapshot});return snapshot;}
      }
      throw new Error('对话正在更新，请稍后刷新历史。');
    })().finally(()=>pendingTrees.delete(key));
@@ -69,7 +73,15 @@ async function saveBranchChanges(changes) {
 function requireVisible(id) { if (store.branches[id]?.hidden) throw new Error('此分支已删除，请先撤销删除。'); }
 const workspace = remoteRuntime?.resolveWorkspace || resolveWorkspace;
 async function source(action, id) {
-  if (remoteRuntime) {const result = await remoteRuntime.source(action, id);return action === 'list' ? result.filter(row => !owned(logicalId(row.id))) : result;}
+  if (remoteRuntime) {
+    if(action==='list') {
+      if(sourceListCache && Date.now()-sourceListAt<10000)return sourceListCache.filter(row=>!owned(logicalId(row.id)));
+      if(!sourceListPending) sourceListPending=remoteRuntime.source(action,id).then(result=>{sourceListCache=result;sourceListAt=Date.now();return result;}).finally(()=>{sourceListPending=null;});
+      try {const result=await sourceListPending;return result.filter(row=>!owned(logicalId(row.id)));}
+      catch(error){if(sourceListCache)return sourceListCache.filter(row=>!owned(logicalId(row.id)));throw error;}
+    }
+    const result = await remoteRuntime.source(action, id);return result;
+  }
   const {stdout} = await exec(python, ['-X', 'utf8', path.join(base, 'source.py'), action, userHome, home, ...(id ? [id] : [])], {windowsHide: true, maxBuffer: 128 * 1024 * 1024});
   return JSON.parse(stdout);
 }
@@ -406,7 +418,7 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/api/interactions/respond') return json(res, 200, interactions.answer(input));
       if (url.pathname === '/api/stop') return json(res, 200, await stopTurn(input));
       const sendRevision=stopRevisions.get(input.threadId)||0;
-      treeRevision++;
+      treeRevision++;treeCache.clear();if(url.pathname!=='/api/send')sourceListCache=null;
       const result = await exclusive(async () => {
         if (url.pathname === '/api/execution') throw new Error('已取消模式和目录配置，请刷新网页。文件编辑默认可用，额外访问通过请求批准。');
         if (url.pathname === '/api/questions/delete') return deleteQuestion(input);

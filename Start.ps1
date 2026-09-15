@@ -55,14 +55,15 @@ try {
     if (-not (Test-Path -LiteralPath $node)) { throw 'Node.js was not found.' }
     # The repository intentionally excludes node_modules. Bootstrap runtime
     # dependencies on first launch so a clean checkout starts reliably.
-    if (-not (Test-Path -LiteralPath (Join-Path $treeDir 'node_modules/ssh2/package.json'))) {
+    $sshPackage = Join-Path $treeDir "node_modules\ssh2\package.json"
+    if (-not (Test-Path -LiteralPath $sshPackage)) {
         $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
-        if (-not $npm) { $npm = Join-Path (Split-Path $node) 'npm.cmd' }
-        if (-not (Test-Path -LiteralPath $npm)) { throw 'npm was not found. Install Node.js 20+ (which includes npm), then run Start.cmd again.' }
-        Write-Host 'Installing required packages (first launch only)...'
+        if (-not $npm) { $npm = Join-Path (Split-Path $node) "npm.cmd" }
+        if (-not (Test-Path -LiteralPath $npm)) { throw "npm was not found. Install Node.js 20+ (which includes npm), then run Start.cmd again." }
+        Write-Host "Installing required packages (first launch only)..."
         & $npm install --no-audit --no-fund --prefer-offline
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $treeDir 'node_modules/ssh2/package.json'))) {
-            throw '依赖安装失败，无法找到 ssh2。请关闭正在运行的 branchat 窗口后重新启动 Start.cmd。'
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $sshPackage)) {
+            throw "依赖安装失败，无法找到 ssh2。请关闭正在运行的 branchat 窗口后重新启动 Start.cmd。"
         }
     }
     New-Item -ItemType Directory -Path $treeData -Force | Out-Null
@@ -77,7 +78,7 @@ try {
     } finally { $env:TREE_DATA_DIR = $treePreviousData }
     for ($attempt=0; $attempt -lt 60; $attempt++) {
         Start-Sleep -Milliseconds 500
-        if ($proc.HasExited) { throw ('Service failed. See ' + (Join-Path $treeData 'server-error.log')) }
+        if ($proc.HasExited) { $logPath = Join-Path $treeData "server-error.log"; throw "Service failed. See $logPath" }
         if (Test-Path -LiteralPath $treeState) {
             try { $state = Get-Content -LiteralPath $treeState -Raw | ConvertFrom-Json } catch { continue }
             if ($state.startedAt -ge $startedAt -and $state.pid -eq $proc.Id) {
@@ -87,7 +88,7 @@ try {
             }
         }
     }
-    throw 'Service startup timed out. Check work/tree-data/server-error.log.'
+    throw "Service startup timed out. Check work/tree-data/server-error.log."
 } finally {
     if ($treeLocked) { $treeMutex.ReleaseMutex() }
     $treeMutex.Dispose()

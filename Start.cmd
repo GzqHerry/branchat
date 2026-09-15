@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if not exist "node_modules\ssh2\package.json" (
+if not exist "node_modules\ssh2\package.json" if not exist "node_modules\safer-buffer\package.json" (
   echo Installing dependencies...
   call npm install --no-audit --no-fund --prefer-offline
   if errorlevel 1 (
